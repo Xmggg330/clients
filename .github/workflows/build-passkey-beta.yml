@@ -1,0 +1,147 @@
+name: Build Bitwarden #17316 Passkey Beta
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-passkey-beta:
+    name: Build Windows x64 APPX
+    runs-on: windows-2022
+
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+
+    steps:
+      # Important:
+      # Build directly from the OFFICIAL Bitwarden repository,
+      # not from the contents of this fork.
+      - name: Checkout official Bitwarden #17316 branch
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          repository: bitwarden/clients
+          ref: feature/windows-native-passkeys-provider
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Record official source commit
+        shell: pwsh
+        run: |
+          $commit = git rev-parse HEAD
+          Write-Host "Official Bitwarden source commit: $commit"
+          "Repository: https://github.com/bitwarden/clients" | Out-File build-info.txt
+          "Branch: feature/windows-native-passkeys-provider" | Out-File build-info.txt -Append
+          "Commit: $commit" | Out-File build-info.txt -Append
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Show build environment
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          rustc --version
+          cargo --version
+          rustup show
+
+      - name: Install dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Build native Windows components
+        shell: pwsh
+        working-directory: apps/desktop/desktop_native
+        run: node build.js cross-platform
+
+      - name: Build Bitwarden Desktop
+        shell: pwsh
+        working-directory: apps/desktop
+        run: npm run build
+
+      # Build ONLY the x64 APPX.
+      # Do not use Bitwarden signing secrets.
+      - name: Build Windows x64 Beta APPX
+        shell: pwsh
+        working-directory: apps/desktop
+        run: |
+          npx electron-builder `
+            --config electron-builder.beta.json `
+            --win appx:x64 `
+            --publish never
+
+      - name: Locate APPX
+        id: locate
+        shell: pwsh
+        run: |
+          $appx = Get-ChildItem "apps/desktop/dist" `
+            -Filter "Bitwarden-Beta-*-x64.appx" |
+            Select-Object -First 1
+
+          if (-not $appx) {
+            throw "x64 APPX was not generated."
+          }
+
+          Write-Host "Generated APPX: $($appx.FullName)"
+          "appx=$($appx.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($appx.Name)" >> $env:GITHUB_OUTPUT
+
+      # Critical check:
+      # Make sure the APPX actually contains the Windows native
+      # passkey-provider COM registration from PR #17316.
+      - name: Verify Passkey Provider manifest
+        shell: pwsh
+        run: |
+          $appx = "${{ steps.locate.outputs.appx }}"
+          $inspect = "$env:RUNNER_TEMP\bw-appx-inspect"
+
+          Remove-Item $inspect -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $inspect -ItemType Directory | Out-Null
+
+          Copy-Item $appx "$inspect\package.zip"
+          Expand-Archive "$inspect\package.zip" "$inspect\unpacked"
+
+          $manifest = Get-Content "$inspect\unpacked\AppxManifest.xml" -Raw
+
+          $required = @(
+            "windows.comServer",
+            "Bitwarden Passkey Manager",
+            "0f7dc5d9-69ce-4652-8572-6877fd695062"
+          )
+
+          foreach ($text in $required) {
+            if ($manifest -notmatch [regex]::Escape($text)) {
+              throw "Required Passkey Provider manifest entry missing: $text"
+            }
+            Write-Host "FOUND: $text"
+          }
+
+          Write-Host "Passkey Provider manifest verification PASSED."
+
+      - name: Generate SHA256
+        shell: pwsh
+        run: |
+          $appx = "${{ steps.locate.outputs.appx }}"
+          $hash = (Get-FileHash $appx -Algorithm SHA256).Hash
+
+          Write-Host "SHA256: $hash"
+          "APPX: ${{ steps.locate.outputs.name }}" | Out-File build-info.txt -Append
+          "SHA256: $hash" | Out-File build-info.txt -Append
+
+          Get-Content build-info.txt
+
+      - name: Upload x64 APPX
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: Bitwarden-17316-Windows-x64-APPX
+          path: |
+            apps/desktop/dist/Bitwarden-Beta-*-x64.appx
+            build-info.txt
+          if-no-files-found: error
+          retention-days: 7
