@@ -1,4 +1,4 @@
-name: Build Bitwarden #17316 Passkey Beta
+name: "Build Bitwarden #17316 Passkey Beta"
 
 on:
   workflow_dispatch:
