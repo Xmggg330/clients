@@ -35,6 +35,41 @@ jobs:
           "Branch: feature/windows-native-passkeys-provider" | Out-File build-info.txt -Append
           "Commit: $commit" | Out-File build-info.txt -Append
 
+      
+      # TEST ONLY: Override the Windows Native Passkey flag.
+      - name: Enable Windows Native Passkey for isolated test
+        shell: pwsh
+        run: |
+          $file = "libs/common/src/enums/feature-flag.enum.ts"
+          $src = Get-Content $file -Raw
+
+          $needle = '  if (serverConfig?.featureStates == null || serverConfig.featureStates[flag] == null) {'
+
+          $count = [regex]::Matches(
+            $src, [regex]::Escape($needle)
+          ).Count
+
+          if ($count -ne 1) {
+            throw "Feature flag function changed. Stop build."
+          }
+
+          $lines = @(
+            '  if (flag === FeatureFlag.WindowsNativeCredentialSync) {'
+            '    return true as unknown as FeatureFlagValueType<Flag>;'
+            '  }'
+            ''
+          )
+
+          $insert = ($lines -join "`n") + "`n"
+          $updated = $src.Replace($needle, $insert + $needle)
+
+          Set-Content -Path $file -Value $updated -Encoding utf8
+
+          "WindowsNativeCredentialSync forced true - TEST ONLY" |
+            Add-Content build-info.txt
+
+          git diff -- $file
+
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
