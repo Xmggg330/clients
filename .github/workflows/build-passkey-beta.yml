@@ -144,11 +144,19 @@ jobs:
 
           $manifest = Get-Content "$inspect\unpacked\AppxManifest.xml" -Raw
 
+
+          # Read expected COM CLSID from the actual source config.
+          $configPath = "apps/desktop/resources/windows_plugin_authenticator_config.beta.json"
+          
+          $config = Get-Content $configPath -Raw |
+              ConvertFrom-Json
+          
           $required = @(
-            "windows.comServer",
-            "Bitwarden Passkey Manager",
-            "0f7dc5d9-69ce-4652-8572-6877fd695062"
+              "windows.comServer",
+              "Bitwarden Beta Passkey Manager",
+              $config.clsid
           )
+
 
           foreach ($text in $required) {
             if ($manifest -notmatch [regex]::Escape($text)) {
